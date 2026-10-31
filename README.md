@@ -14,16 +14,12 @@ Faça o download e utilizar o template [lab-cloudshell.yaml](./lab-cloudshell.ya
 ## Custos e exclusão do ambiente
 
 > [!WARNING]
-> **O ambiente criado pelo template gera custos. Ao terminar os testes, exclua a pilha pelo AWS CloudFormation.** Parar a EC2 não remove os volumes EBS, e o Elastic IP continua alocado até ser liberado. Não considere este laboratório gratuito.
-
-Podem existir cobranças pelo uso da EC2, pelos volumes EBS, pelo Elastic IP, pelo alarme do CloudWatch e pelos serviços de automação. O uso do AWS CloudShell também poderá gerar cobranças por requisições de listagem.
-
-Porém, os custos gerados são mínimos, e em testes controlados gerou centavos de dólar.
+> **O ambiente criado por este template gera custos. Ao terminar os testes, exclua a pilha pelo AWS CloudFormation ou pelo AWS CloudShell. Não considere este laboratório gratuito**. Porém, os custos gerados são mínimos, e nos testes controlados ele gerou centavos de dólar.
 
 > [!NOTE]
-> Se você não excluir o ambiente manualmente, o template está configurado para **fazer a exclusão automática da pilha 10 minutos após o Amazon EC2 ficar parado**. O horário programado aparece em **Saídas → `DeletionTimeUtc`**, em UTC. O agendamento tem precisão de um minuto, e a exclusão dos recursos leva um tempo adicional.
+> Se você não excluir o ambiente, o template está configurado para **fazer a exclusão automática da pilha 10 minutos após o Amazon EC2 ficar parado**. O horário programado aparece em **Saídas → `DeletionTimeUtc`**, em UTC. O agendamento tem precisão de um minuto, e a exclusão dos recursos leva um tempo adicional.
 
-A exclusão automática depende da criação bem-sucedida do agendamento e das permissões necessárias. Se a implantação falhar antes dessa etapa, a exclusão automática pode não ser configurada. Por isso, confira o estado final da pilha no AWS CloudFormation e siga a seção [Excluir o laboratório](#excluir-o-laboratório).
+> A exclusão automática depende da criação bem-sucedida do agendamento e das permissões necessárias. Se a implantação falhar antes dessa etapa, a exclusão automática não será configurada. Por isso, confira o estado final da pilha no AWS CloudFormation e siga as instruções na seção [Excluir o laboratório](#excluir-o-laboratório) e [Erros comuns e soluções](#erros-comuns-e-soluções) se precisar de ajuda.
 
 ## Antes de começar
 
@@ -289,7 +285,8 @@ aws cloudformation wait stack-delete-complete \
 
 O comando de espera não exibe progresso e retorna sem erro quando a exclusão termina. Se houver falha, consulte os eventos da pilha no console e corrija a causa antes de concluir a limpeza.
 
-`Nota:` Não remova nenhum recurso manualmente. Faça a limpeza desse laboratório através da exclusão da pilha via AWS CloudFormation ou via AWS CloudShell.
+> [!NOTE]
+> Não remova nenhum recurso manualmente. Faça a limpeza desse laboratório através da exclusão da pilha via AWS CloudFormation ou via AWS CloudShell.
 
 ### Remover a role IAM retida
 
@@ -308,7 +305,8 @@ aws iam delete-role \
   --role-name cloudshell-exclusao-cfn
 ```
 
-`Nota:` Remova essa função antes de recriar o laboratório com o mesmo nome de pilha, para evitar conflito de nome.
+> [!NOTE]
+> Remova essa função antes de recriar o laboratório com o mesmo nome de pilha, para evitar conflito de nome.
 
 ## Erros comuns e soluções
 
