@@ -1,0 +1,59 @@
+# Arquivos de editor e IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Arquivos do macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Arquivos de log
+*.log
+logs/
+
+# Arquivos de ambiente e secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+secrets/
+
+# Arquivos de build e temporários
+node_modules/
+dist/
+build/
+tmp/
+temp/
+*.tmp
+
+# Arquivos grandes ou binários
+*.zip
+*.tar.gz
+*.dmg
+*.exe
+*.msi
+*.jar
+*.war
+*.ear
+
+# Arquivos de cache
+.cache/
+.__pycache__/
+*.pyc
+*.pyo
+
+# Arquivos de coverage
+coverage/
+.nyc_output/
+
+# Arquivos do Kiro (opcional)
+.kiro/
+
+# Arquivos de dependências (se aplicável)
+vendor/
+packages/

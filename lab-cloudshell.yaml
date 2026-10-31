@@ -1,0 +1,498 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Laboratorio temporario para testar 10 comandos no AWS CloudShell.
+  Criar em us-east-1. Os recursos podem gerar cobrancas.
+  EC2 parada automaticamente e exclusao programada apos 10 minutos.
+  O exemplo S3 usa buckets existentes. A role de exclusao e retida.
+
+Parameters:
+  LabAvailabilityZone:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Description: Zona da subnet. Se faltar capacidade, escolher outra zona de us-east-1.
+    Default: us-east-1a
+  LatestAmi:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Description: AMI Amazon Linux 2023. Manter o valor padrao.
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+
+Resources:
+  LabVpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.90.0.0/24
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-vpc'
+
+  # Sem Internet Gateway, NAT Gateway ou IP publico na instancia.
+  LabSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref LabVpc
+      AvailabilityZone: !Ref LabAvailabilityZone
+      CidrBlock: 10.90.0.16/28
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-subnet'
+
+  # Regra intencional para aparecer na consulta do exemplo 4.
+  # A instancia nao tem conectividade publica nem servidor HTTP.
+  LabSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Regra HTTP demonstrativa para o laboratorio CloudShell
+      VpcId: !Ref LabVpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: Regra demonstrativa sem conectividade publica
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-sg'
+
+  LabInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref LatestAmi
+      InstanceType: t2.micro
+      CreditSpecification:
+        CPUCredits: standard
+      SubnetId: !Ref LabSubnet
+      SecurityGroupIds:
+        - !GetAtt LabSecurityGroup.GroupId
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeType: gp3
+            VolumeSize: 8
+            Encrypted: true
+            DeleteOnTermination: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-ec2'
+
+  # Volume vazio e sem attachment para aparecer como available.
+  LabDetachedVolume:
+    Type: AWS::EC2::Volume
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      AvailabilityZone: !GetAtt LabSubnet.AvailabilityZone
+      Size: 1
+      VolumeType: gp3
+      Encrypted: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-ebs-desconectado'
+
+  # Sem InstanceId ou EIPAssociation: permanece sem associacao.
+  LabUnassociatedEip:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-eip-sem-associacao'
+
+  LabFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-funcao'
+      RetentionInDays: 1
+
+  LabFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: !Sub '/cloudshell-lab/${AWS::StackName}/'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: GravarSomenteLogsDaFuncao
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !GetAtt LabFunctionLogGroup.Arn
+
+  LabFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-funcao'
+      Description: Funcao demonstrativa para listar runtime e memoria
+      Runtime: nodejs22.x
+      Handler: index.handler
+      Role: !GetAtt LabFunctionRole.Arn
+      MemorySize: 128
+      Timeout: 3
+      Code:
+        ZipFile: |
+          exports.handler = async () => ({
+            statusCode: 200,
+            body: JSON.stringify({ mensagem: "Laboratorio CloudShell" })
+          });
+
+  # Alarme de demonstracao: ausencia de dados e tratada como violacao.
+  # Nao representa uma falha real e nao executa acoes.
+  LabAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-alarme-demonstracao'
+      AlarmDescription: Demonstracao de ALARM por ausencia de dados
+      Namespace: Lab/CloudShell
+      MetricName: DemonstracaoSemDados
+      Dimensions:
+        - Name: StackName
+          Value: !Ref AWS::StackName
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: breaching
+      ActionsEnabled: false
+
+  AutoSetupLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-lab'
+      RetentionInDays: 1
+
+  AutoSetupRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: !Sub '/cloudshell-lab/${AWS::StackName}/'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: PrepararLaboratorio
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ec2:DescribeInstances
+                Resource: '*'
+              - Effect: Allow
+                Action: ec2:StopInstances
+                Resource: !Sub 'arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/${LabInstance}'
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !GetAtt AutoSetupLogGroup.Arn
+
+  AutoSetupFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-lab'
+      Description: Para somente a EC2 do laboratorio e calcula o horario de exclusao
+      Runtime: nodejs22.x
+      Handler: index.handler
+      Role: !GetAtt AutoSetupRole.Arn
+      MemorySize: 128
+      Timeout: 300
+      Code:
+        ZipFile: |
+          const https = require('node:https');
+          const {
+            EC2Client, DescribeInstancesCommand, StopInstancesCommand,
+            waitUntilInstanceRunning, waitUntilInstanceStopped
+          } = require('@aws-sdk/client-ec2');
+
+          const ec2 = new EC2Client({
+            region: process.env.AWS_REGION,
+            maxAttempts: 5
+          });
+
+          async function reply(event, status, data, reason) {
+            const body = JSON.stringify({
+              Status: status,
+              Reason: reason || 'Operacao concluida.',
+              PhysicalResourceId: event.PhysicalResourceId ||
+                event.StackId + '/preparacao',
+              StackId: event.StackId,
+              RequestId: event.RequestId,
+              LogicalResourceId: event.LogicalResourceId,
+              Data: data
+            });
+            await new Promise((resolve, reject) => {
+              const req = https.request(event.ResponseURL, {
+                method: 'PUT',
+                headers: {
+                  'content-type': '',
+                  'content-length': Buffer.byteLength(body)
+                }
+              }, res => {
+                res.resume();
+                res.on('end', () => {
+                  if (res.statusCode >= 200 && res.statusCode < 300) {
+                    resolve();
+                  } else {
+                    reject(new Error('Falha ao responder ao CloudFormation.'));
+                  }
+                });
+              });
+              req.setTimeout(15000, () => req.destroy(new Error('Timeout na resposta.')));
+              req.on('error', reject);
+              req.end(body);
+            });
+          }
+
+          exports.handler = async event => {
+            if (event.RequestType === 'Delete') {
+              await reply(event, 'SUCCESS', {});
+              return;
+            }
+            let data;
+            try {
+              const instanceId = event.ResourceProperties.InstanceId;
+              const input = { InstanceIds: [instanceId] };
+              const result = await ec2.send(new DescribeInstancesCommand(input));
+              let state = result.Reservations?.[0]?.Instances?.[0]?.State?.Name;
+              if (state === 'pending') {
+                await waitUntilInstanceRunning({ client: ec2, maxWaitTime: 120 }, input);
+                state = 'running';
+              }
+              if (state === 'running') {
+                await ec2.send(new StopInstancesCommand(input));
+                state = 'stopping';
+              }
+              if (state === 'stopping') {
+                await waitUntilInstanceStopped({ client: ec2, maxWaitTime: 120 }, input);
+              } else if (state !== 'stopped') {
+                throw new Error('Estado inesperado da instancia: ' + state);
+              }
+              const expiresAt = new Date(Date.now() + 10 * 60 * 1000)
+                .toISOString().slice(0, 19);
+              data = {
+                ScheduleExpression: 'at(' + expiresAt + ')',
+                DeletionTimeUtc: expiresAt + 'Z'
+              };
+            } catch (error) {
+              console.error(error.name, error.message);
+              await reply(event, 'FAILED', {}, error.message);
+              return;
+            }
+            await reply(event, 'SUCCESS', data);
+          };
+
+  PrepareLab:
+    Type: Custom::PrepareCloudShellLab
+    DependsOn:
+      - LabFunction
+      - LabAlarm
+      - LabDetachedVolume
+      - LabUnassociatedEip
+    Properties:
+      ServiceToken: !GetAtt AutoSetupFunction.Arn
+      ServiceTimeout: '360'
+      InstanceId: !Ref LabInstance
+      SetupVersion: '10-minutos-v1'
+
+  AutoDeleteScheduleGroup:
+    Type: AWS::Scheduler::ScheduleGroup
+    Properties:
+      Name: !Sub '${AWS::StackName}-grupo'
+
+  # Esta role permanece para nao perder permissoes durante a exclusao.
+  # Remover manualmente APOS a stack chegar a DELETE_COMPLETE.
+  CleanupServiceRole:
+    Type: AWS::IAM::Role
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RoleName: !Sub '${AWS::StackName}-exclusao-cfn'
+      Path: /cloudshell-lab-cleanup/
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudformation.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CleanupLab
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ConsultarEC2DuranteExclusao
+                Effect: Allow
+                Action: ec2:Describe*
+                Resource: '*'
+              - Sid: ExcluirRecursosEC2DoLaboratorio
+                Effect: Allow
+                Action:
+                  - ec2:TerminateInstances
+                  - ec2:DeleteVolume
+                  - ec2:ReleaseAddress
+                  - ec2:DeleteSecurityGroup
+                  - ec2:RevokeSecurityGroupIngress
+                  - ec2:RevokeSecurityGroupEgress
+                  - ec2:DeleteSubnet
+                  - ec2:DeleteVpc
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/${LabInstance}'
+                  - !Sub 'arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:volume/${LabDetachedVolume}'
+                  - !Sub 'arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:elastic-ip/${LabUnassociatedEip.AllocationId}'
+                  - !Sub 'arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:security-group/${LabSecurityGroup.GroupId}'
+                  - !Sub 'arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:subnet/${LabSubnet}'
+                  - !Sub 'arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:vpc/${LabVpc}'
+              - Sid: ExcluirFuncoesDoLaboratorio
+                Effect: Allow
+                Action:
+                  - lambda:GetFunction
+                  - lambda:GetFunctionConfiguration
+                  - lambda:ListTags
+                  - lambda:DeleteFunction
+                  - lambda:InvokeFunction
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-funcao'
+                  - !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-lab'
+              - Sid: ExcluirRolesDoLaboratorio
+                Effect: Allow
+                Action:
+                  - iam:GetRole
+                  - iam:GetRolePolicy
+                  - iam:ListRolePolicies
+                  - iam:ListAttachedRolePolicies
+                  - iam:DeleteRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:DeleteRole
+                Resource: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cloudshell-lab/${AWS::StackName}/*'
+              - Sid: ConsultarLogs
+                Effect: Allow
+                Action: logs:DescribeLogGroups
+                Resource: '*'
+              - Sid: ExcluirLogsDoLaboratorio
+                Effect: Allow
+                Action:
+                  - logs:DeleteLogGroup
+                  - logs:ListTagsForResource
+                Resource:
+                  - !GetAtt LabFunctionLogGroup.Arn
+                  - !GetAtt AutoSetupLogGroup.Arn
+                  - !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-funcao'
+                  - !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-lab'
+              - Sid: ExcluirAlarmeDoLaboratorio
+                Effect: Allow
+                Action:
+                  - cloudwatch:DescribeAlarms
+                  - cloudwatch:DeleteAlarms
+                  - cloudwatch:ListTagsForResource
+                Resource: !GetAtt LabAlarm.Arn
+              - Sid: ConsultarAgendamentos
+                Effect: Allow
+                Action: scheduler:ListSchedules
+                Resource: '*'
+              - Sid: ExcluirAgendamentoDoLaboratorio
+                Effect: Allow
+                Action:
+                  - scheduler:GetSchedule
+                  - scheduler:DeleteSchedule
+                Resource: !Sub 'arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/${AutoDeleteScheduleGroup}/*'
+              - Sid: ExcluirGrupoDoLaboratorio
+                Effect: Allow
+                Action:
+                  - scheduler:GetScheduleGroup
+                  - scheduler:DeleteScheduleGroup
+                  - scheduler:ListTagsForResource
+                Resource: !GetAtt AutoDeleteScheduleGroup.Arn
+
+  AutoDeleteExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: !Sub '/cloudshell-lab/${AWS::StackName}/'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: scheduler.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnEquals:
+                aws:SourceArn: !GetAtt AutoDeleteScheduleGroup.Arn
+      Policies:
+        - PolicyName: SolicitarExclusaoDestaStack
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: cloudformation:DeleteStack
+                Resource: !Ref AWS::StackId
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt CleanupServiceRole.Arn
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: cloudformation.amazonaws.com
+
+  AutoDeleteSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: !Sub '${AWS::StackName}-excluir'
+      GroupName: !Ref AutoDeleteScheduleGroup
+      Description: Exclusao unica do laboratorio 10 minutos apos a parada da EC2
+      ScheduleExpression: !GetAtt PrepareLab.ScheduleExpression
+      ScheduleExpressionTimezone: UTC
+      FlexibleTimeWindow:
+        Mode: 'OFF'
+      State: ENABLED
+      Target:
+        Arn: !Sub 'arn:${AWS::Partition}:scheduler:::aws-sdk:cloudformation:deleteStack'
+        RoleArn: !GetAtt AutoDeleteExecutionRole.Arn
+        Input: !Sub >-
+          {"StackName":"${AWS::StackId}","RoleARN":"${CleanupServiceRole.Arn}"}
+        RetryPolicy:
+          MaximumEventAgeInSeconds: 3600
+          MaximumRetryAttempts: 3
+
+Outputs:
+  InstanceId:
+    Description: Instancia do laboratorio, parada automaticamente pela preparacao
+    Value: !Ref LabInstance
+  DetachedVolumeId:
+    Description: Volume EBS vazio e desconectado
+    Value: !Ref LabDetachedVolume
+  SecurityGroupId:
+    Description: Security group com a regra demonstrativa de entrada
+    Value: !GetAtt LabSecurityGroup.GroupId
+  ElasticIp:
+    Description: Elastic IP alocado sem associacao
+    Value: !Ref LabUnassociatedEip
+  FunctionName:
+    Description: Funcao Lambda demonstrativa
+    Value: !Ref LabFunction
+  AlarmName:
+    Description: Alarme que passa para ALARM apos a avaliacao dos dados ausentes
+    Value: !Ref LabAlarm
+  DeletionTimeUtc:
+    Description: Horario UTC programado para iniciar a exclusao automatica
+    Value: !GetAtt PrepareLab.DeletionTimeUtc
+  CleanupRoleName:
+    Description: Unica role retida. Remover manualmente depois da exclusao da stack
+    Value: !Ref CleanupServiceRole
